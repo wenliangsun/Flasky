@@ -8,6 +8,11 @@
 <link rel="stylesheet" type="text/css" href="{{url_for('static',filename='styles.css')}}">
 {% endblock %}
 
+<!--设置背景-->
+{% block body %}
+<body background="{{url_for('static',filename='background.jpg')}}"
+      style="background-repeat: repeat;width: 100%;height: 100% ">
+
 {% block navbar %}
 <div class="navbar navbar-inverse" role="navigation">
     <div class="container">
@@ -25,8 +30,12 @@
             {% if current_user.is_authenticated %}
             <li><a href="{{url_for('main.user',username=current_user.username)}}">Profile</a></li>
             {% endif %}
+
         </ul>
         <ul class="nav navbar-nav navbar-right">
+            {% if current_user.can(Permission.MODERATE_COMMENTS) %}
+            <li><a href="{{url_for('main.moderate')}}">Moderate Comments</a></li>
+            {% endif %}
             {% if current_user.is_authenticated %}
             <li class="dropdown">
                 <a href="#" class="dropdown-toggle" data-toggle="dropdown">
@@ -67,8 +76,12 @@
 {{moment.include_moment()}}
 {% endblock %}
 
+<!--<在这儿可以切换夜间模式>-->
+
 {% block styles %}
 {{ super() }}
 <link rel="stylesheet"
-      href="https://maxcdn.bootstrapcdn.com/bootswatch/3.3.7/darkly/bootstrap.min.css">
+      href="https://bootswatch.com/3/flatly/bootstrap.min.css">
+{% endblock %}
+</body>
 {% endblock %}

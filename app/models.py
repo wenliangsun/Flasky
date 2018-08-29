@@ -34,6 +34,63 @@ class Permission:  # 权限常亮 (程序的权限)
     ADMINISTER = 0x80  # 0b10000000 管理网站
 
 
+class Role(db.Model):
+    __tablename__ = "roles"
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String, unique=True)
+    default = db.Column(db.Boolean, default=False, index=True)
+    permissions = db.Column(db.Integer)
+    users = db.relationship("User", backref='role', lazy='dynamic')
+
+    # def __init__(self, **kwargs):
+    #     super(Role, self).__init__(**kwargs)
+    #     if self.permissions is None:
+    #         self.permissions = 0
+
+    @staticmethod
+    def insert_roles():
+        roles = {
+            'User': (Permission.FOLLOW |  # 普通用户
+                     Permission.COMMENT |
+                     Permission.WRITE_ARTICLES, True),
+            'Moderator': (Permission.FOLLOW |  # 中等权限用户
+                          Permission.COMMENT |
+                          Permission.WRITE_ARTICLES |
+                          Permission.MODERATE_COMMENTS, False),
+            'Administrator': (0xff, False)  # 管理员
+        }
+        # default_role = 'User'
+        for r in roles:
+            role = Role.query.filter_by(name=r).first()
+            if role is None:
+                role = Role(name=r)
+            role.permissions = roles[r][0]
+            role.default = roles[r][1]
+            # role.reset_permissions()
+            # for perm in roles[r]:
+            #     role.add_permission(perm)
+            # role.default = role.name == default_role
+            db.session.add(role)
+        db.session.commit()
+
+    def remove_permission(self, perm):
+        if self.has_permission(perm):
+            self.permissions -= perm
+
+    def add_permission(self, perm):
+        if not self.has_permission(perm):
+            self.permissions += perm
+
+    def reset_permission(self):
+        self.permissions = 0
+
+    def has_permission(self, perm):
+        return self.permissions & perm == perm
+
+    def __repr__(self):
+        return "<User %r>" % self.name
+
+
 class Follow(db.Model):  # 关注关联表的模型实现
     __tablename__ = 'follows'
     follower_id = db.Column(db.Integer, db.ForeignKey('users.id'), primary_key=True)
@@ -67,6 +124,8 @@ class User(UserMixin, db.Model):
                                 lazy='dynamic',
                                 cascade='all,delete-orphan')
 
+    comments = db.relationship("Comment", backref='author', lazy='dynamic')
+
     def __init__(self, **kwargs):  # 定义默认的用户角色
         super(User, self).__init__(**kwargs)
         if self.role is None:
@@ -76,7 +135,8 @@ class User(UserMixin, db.Model):
                 self.role = Role.query.filter_by(default=True).first()
             if self.email is not None and self.avatar_hash is None:
                 self.avatar_hash = hashlib.md5(self.email.encode('utf-8')).hexdigest()
-            self.follow(self)
+            # TODO 这儿有BUG，待解决！！！
+            # self.follow(self)
 
     @staticmethod
     def add_self_follows():  # 更新数据库，把用户设为自己的关注者
@@ -222,45 +282,15 @@ class User(UserMixin, db.Model):
         return '<User %r>' % self.username
 
 
-class Role(db.Model):
-    __tablename__ = "roles"
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String, unique=True)
-    default = db.Column(db.Boolean, default=False, index=True)
-    permissions = db.Column(db.Integer)
-    users = db.relationship("User", backref='role', lazy='dynamic')
-
-    @staticmethod
-    def insert_roles():
-        roles = {
-            'User': (Permission.FOLLOW |  # 普通用户
-                     Permission.COMMENT |
-                     Permission.WRITE_ARTICLES, True),
-            'Moderator': (Permission.FOLLOW |  # 中等权限用户
-                          Permission.COMMENT |
-                          Permission.WRITE_ARTICLES |
-                          Permission.MODERATE_COMMENTS, False),
-            'Administrator': (0xff, False)  # 管理员
-        }
-        for r in roles:
-            role = Role.query.filter_by(name=r).first()
-            if role is None:
-                role = Role(name=r)
-            role.permissions = roles[r][0]
-            role.default = roles[r][1]
-            db.session.add(role)
-        db.session.commit()
-
-    def __repr__(self):
-        return "<User %r>" % self.name
-
-
 class AnonymousUser(AnonymousUserMixin):  # 是的匿名用户的操作与登录用户一致
     def can(self, permissions):
         return False
 
     def is_administrator(self):
         return False
+
+
+login_manager.anonymous_user = AnonymousUser
 
 
 class Post(db.Model):  # 文章模型
@@ -270,6 +300,8 @@ class Post(db.Model):  # 文章模型
     body_html = db.Column(db.Text)
     timestamp = db.Column(db.DateTime, index=True, default=datetime.utcnow)
     author_id = db.Column(db.Integer, db.ForeignKey('users.id'))
+
+    comments = db.relationship("Comment", backref='post', lazy='dynamic')
 
     @staticmethod
     def generate_fake(count=100):
@@ -286,6 +318,7 @@ class Post(db.Model):  # 文章模型
             db.session.add(p)
             db.session.commit()
 
+    # TODO 这个函数不清楚！！！
     @staticmethod
     def on_changed_body(target, value, oldvalue, initiator):
         allowed_tags = ['a', 'abbr', 'acronym', 'b', 'blockquote', 'code',
@@ -295,5 +328,26 @@ class Post(db.Model):  # 文章模型
                                                        tags=allowed_tags, strip=True))
 
 
-login_manager.anonymous_user = AnonymousUser
 db.event.listen(Post.body, 'set', Post.on_changed_body)
+
+
+class Comment(db.Model):
+    __tablename__ = "comments"
+    id = db.Column(db.Integer, primary_key=True)
+    body = db.Column(db.Text)
+    body_html = db.Column(db.Text)
+    timestamp = db.Column(db.DateTime, index=True, default=datetime.utcnow)
+    disabled = db.Column(db.Boolean)  # 协管理员通过这个字段查禁不当评论
+    author_id = db.Column(db.Integer, db.ForeignKey('users.id'))
+    post_id = db.Column(db.Integer, db.ForeignKey('posts.id'))
+
+    # TODO 这个函数不清楚！！！
+    @staticmethod
+    def on_change_body(target, value, oldvalue, initiator):
+        allowed_tags = ['a', 'abbr', 'acronym', 'b', 'code',
+                        'em', 'i', 'strong']
+        target.body_html = bleach.linkify(bleach.clean(
+            markdown(value, output_format='html'), tags=allowed_tags, strip=True))
+
+
+db.event.listen(Comment.body, 'set', Comment.on_change_body)

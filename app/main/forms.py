@@ -59,3 +59,8 @@ class EditProfileAdminForm(FlaskForm):  # 管理员使用的资料编辑表单
 class PostForm(FlaskForm):
     body = PageDownField("What's on your mind?", validators=[DataRequired()])
     submit = SubmitField('Submit')
+
+
+class CommentForm(FlaskForm):  # 评论输入表单
+    body = StringField('', validators=[DataRequired()])
+    submit = SubmitField('Submit')

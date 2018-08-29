@@ -4,7 +4,11 @@
 
 {% block page_content %}
 <div class="page-header">
+    {% if current_user.is_authenticated %}
     <img class="img-rounded profile-thumbnail" src="{{current_user.gravatar(size=256)}}">
+    {% else %}
+    <img class="img-rounded profile-thumbnail" src="{{url_for('static',filename='anonymous.jpg')}}" height="256" width="256">
+    {% endif %}
     <div class="profile-header">
         <h1>{{user.username}}</h1>
         {% if user.name or user.location %}
