@@ -28,17 +28,10 @@ def load_user(user_id):
 
 class Permission:  # 权限常亮 (程序的权限)
     FOLLOW = 0x01  # 0b00000001 关注其他用户
-    COMMENT = 0x02  # 0b00000010 在他人撰写的文章中发布评论
+    COMMIT = 0x02  # 0b00000010 在他人撰写的文章中发布评论
     WRITE_ARTICLES = 0x04  # 0b00000100 写原创文章
     MODERATE_COMMENTS = 0x08  # 0b00001000 查处他人发表的不当评论
     ADMINISTER = 0x80  # 0b10000000 管理网站
-
-
-class Follow(db.Model):  # 关注关联表的模型实现
-    __tablename__ = 'follows'
-    follower_id = db.Column(db.Integer, db.ForeignKey('users.id'), primary_key=True)
-    followed_id = db.Column(db.Integer, db.ForeignKey('users.id'), primary_key=True)
-    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
 
 
 class User(UserMixin, db.Model):
@@ -58,15 +51,6 @@ class User(UserMixin, db.Model):
     posts = db.relationship('Post', backref='author', lazy='dynamic')
     confirmed = db.Column(db.Boolean, default=False)  # 是否确认
 
-    followed = db.relationship('Follow', foreign_keys=[Follow.follower_id],
-                               backref=db.backref('follower', lazy='joined'),
-                               lazy='dynamic',
-                               cascade='all,delete-orphan')
-    followers = db.relationship('Follow', foreign_keys=[Follow.followed_id],
-                                backref=db.backref('followed', lazy='joined'),
-                                lazy='dynamic',
-                                cascade='all,delete-orphan')
-
     def __init__(self, **kwargs):  # 定义默认的用户角色
         super(User, self).__init__(**kwargs)
         if self.role is None:
@@ -76,15 +60,6 @@ class User(UserMixin, db.Model):
                 self.role = Role.query.filter_by(default=True).first()
             if self.email is not None and self.avatar_hash is None:
                 self.avatar_hash = hashlib.md5(self.email.encode('utf-8')).hexdigest()
-            self.follow(self)
-
-    @staticmethod
-    def add_self_follows():  # 更新数据库，把用户设为自己的关注者
-        for user in User.query.all():
-            if not user.is_following(user):
-                user.follow(user)
-                db.session.add(user)
-                db.session.commit()
 
     def can(self, permissions):
         return self.role is not None and (self.role.permissions & permissions) == permissions
@@ -176,10 +151,6 @@ class User(UserMixin, db.Model):
         return '{url}/{hash}?s={size}&d={default}&r={rating}'.format(
             url=url, hash=hash, size=size, default=default, rating=rating)
 
-    @property
-    def followed_posts(self):  # 获取所关注用户的文章
-        return Post.query.join(Follow, Follow.followed_id == Post.author_id).filter(Follow.follower_id == self.id)
-
     @staticmethod
     def generate_fake(count=100):  # 生成虚拟用户和博客文章
         from sqlalchemy.exc import IntegrityError
@@ -202,22 +173,6 @@ class User(UserMixin, db.Model):
             except IntegrityError:
                 db.session.rollback()
 
-    def follow(self, user):
-        if not self.is_following(user):
-            f = Follow(follower=self, followed=user)
-            db.session.add(f)
-
-    def unfollow(self, user):
-        f = self.followed.filter_by(followed_id=user.id).first()
-        if f:
-            db.session.delete(f)
-
-    def is_following(self, user):
-        return self.followed.filter_by(followed_id=user.id).first() is not None
-
-    def is_followed_by(self, user):
-        return self.followers.filter_by(follower_id=user.id).first() is not None
-
     def __repr__(self):
         return '<User %r>' % self.username
 
@@ -234,10 +189,10 @@ class Role(db.Model):
     def insert_roles():
         roles = {
             'User': (Permission.FOLLOW |  # 普通用户
-                     Permission.COMMENT |
+                     Permission.COMMIT |
                      Permission.WRITE_ARTICLES, True),
             'Moderator': (Permission.FOLLOW |  # 中等权限用户
-                          Permission.COMMENT |
+                          Permission.COMMIT |
                           Permission.WRITE_ARTICLES |
                           Permission.MODERATE_COMMENTS, False),
             'Administrator': (0xff, False)  # 管理员
@@ -267,9 +222,9 @@ class Post(db.Model):  # 文章模型
     __tablename__ = 'posts'
     id = db.Column(db.Integer, primary_key=True)
     body = db.Column(db.Text)
-    body_html = db.Column(db.Text)
     timestamp = db.Column(db.DateTime, index=True, default=datetime.utcnow)
     author_id = db.Column(db.Integer, db.ForeignKey('users.id'))
+    body_html = db.Column(db.Text)
 
     @staticmethod
     def generate_fake(count=100):
