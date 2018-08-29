@@ -7,14 +7,15 @@ __mtime__ = '8/6/18'
 """
 
 from datetime import datetime
-from flask import render_template, session, redirect, url_for, abort, flash, request, current_app
+from flask import render_template, session, redirect, url_for
+from flask import abort, flash, request, current_app,make_response
 from flask_login import current_user, login_required
 
 from . import main
 from .forms import NameForm, EditProfileForm, EditProfileAdminForm, PostForm
 from .. import db
 from ..models import User, Role, Permission, Post
-from ..decorators import admin_required
+from ..decorators import admin_required, permission_required
 
 
 @main.route('/', methods=['GET', 'POST'])
@@ -25,10 +26,19 @@ def index():  # index() 视图函数处理这个表单并把以前发布的博�
         db.session.add(post)
         return redirect(url_for('.index'))
     page = request.args.get('page', 1, type=int)
-    pagination = Post.query.order_by(Post.timestamp.desc()).paginate(
+
+    show_followed = False
+    if current_user.is_authenticated:
+        show_followed = bool(request.cookies.get('show_followed', ''))
+    if show_followed:
+        query = current_user.followed_posts
+    else:
+        query = Post.query
+    pagination = query.order_by(Post.timestamp.desc()).paginate(
         page, per_page=current_app.config['FLASKY_POSTS_PER_PAGE'], error_out=False)
     posts = pagination.items
-    return render_template('index.html', form=form, posts=posts, pagination=pagination)
+    return render_template('index.html', form=form, posts=posts,
+                           show_followed=show_followed, pagination=pagination)
 
 
 @main.route('/user/<username>')
@@ -70,7 +80,7 @@ def edit_profile_admin(id):
         user.confirmed = form.confirmed.data
         user.role = Role.query.get(form.role.data)
         user.name = form.name.data
-        user.location = form.name.data
+        user.location = form.location.data
         user.about_me = form.about_me.data
         db.session.add(user)
         flash("The profile has been updated.")
@@ -86,14 +96,14 @@ def edit_profile_admin(id):
 
 
 @main.route('/post/<int:id>')
-def post(id): # 文章的固定链接
+def post(id):  # 文章的固定链接
     post = Post.query.get_or_404(id)
     return render_template('post.html', posts=[post])
 
 
 @main.route('/edit/<int:id>', methods=['GET', 'POST'])
 @login_required
-def edit(id): # 编辑博客文章的路由
+def edit(id):  # 编辑博客文章的路由
     post = Post.query.get_or_404(id)
     if current_user != post.author and not current_user.can(Permission.ADMINISTER):
         abort(403)
@@ -105,3 +115,82 @@ def edit(id): # 编辑博客文章的路由
         return redirect(url_for('.post', id=post.id))
     form.body.data = post.body
     return render_template('edit_post.html', form=form)
+
+
+@main.route('/follow/<username>')
+@login_required
+@permission_required(Permission.FOLLOW)
+def follow(username):  # "关注"路由和视图函数
+    user = User.query.filter_by(username=username).first()
+    if user is None:
+        flash("Invalid user.")
+        return redirect(url_for('.index'))
+    if current_user.is_following(user):
+        flash('You are already following this user.')
+        return redirect(url_for('.user', username=username))
+    current_user.follow(user)
+    flash('You are now following %s.' % username)
+    return redirect(url_for('.user', username=username))
+
+
+@main.route('/unfollow/<username>')
+@login_required
+@permission_required(Permission.FOLLOW)
+def unfollow(username):  # "未关注"路由和视图函数
+    user = User.query.filter_by(username=username).first()
+    if user is None:
+        flash("Invalid user.")
+        return redirect(url_for('.index'))
+    if not current_user.is_following(user):
+        flash('You are not follow this user.')
+        return redirect(url_for('.user', username=username))
+    current_user.unfollow(user)
+    db.session.commit()
+    flash('You are not following %s anymore.' % username)
+    return redirect(url_for('.user', username=username))
+
+
+@main.route('/followers/<username>')
+def followers(username):  # "关注者" 路由和视图函数
+    """
+    用户在其他用户的资料页中点击关注者数量后,将调用 /followers/<username> 路由。
+    """
+    user = User.query.filter_by(username=username).first()
+    if user is None:
+        flash('Invalid user.')
+        return redirect(url_for('.index'))
+    page = request.args.get('page', 1, type=int)
+    pagination = user.followers.paginate(
+        page, per_page=current_app.config['FLASKY_POSTS_PER_PAGE'], error_out=False)
+    print(dir(pagination.items[0]))
+    follows = [{'user': item.follower, 'timestamp': item.timestamp} for item in pagination.items]
+    return render_template('followers.html', user=user, title="Followers of",
+                           endpoint='.followers', pagination=pagination, follows=follows)
+
+
+@main.route('/followed_by/<username>')
+def followed_by(username):
+    user = User.query.filter_by(username=username).first()
+    if user is None:
+        flash("Invalid user.")
+        return redirect(url_for('.index'))
+    page = request.args.get('page', 1, type=int)
+    pagination = user.followed.paginate(
+        page, per_page=current_app.config['FLASKY_POSTS_PER_PAGE'], error_out=False)
+    follows = [{'user': item.followed, 'timestamp': item.timestamp} for item in pagination.items]
+    return render_template('followers.html', user=user, title="Followed by",
+                           endpoint='.followed_by', pagination=pagination, follows=follows)
+
+@main.route('/all')
+@login_required
+def show_all(): # 查询所有文章
+    resp = make_response(redirect(url_for('.index')))
+    resp.set_cookie('show_followed','',max_age=30*24*60*60)
+    return resp
+
+@main.route('/followed')
+@login_required
+def show_followed(): # 查询所关注用户的文章
+    resp = make_response(redirect(url_for('.index')))
+    resp.set_cookie('show_followed','1',max_age=30*24*60*60)
+    return resp
