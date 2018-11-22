@@ -1,4 +1,7 @@
 # Flasky
+![](1.png)
+
+![](2.png)
 
 ## version 0.9
 
